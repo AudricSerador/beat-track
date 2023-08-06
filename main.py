@@ -14,6 +14,7 @@ from kivy.core.audio import SoundLoader
 from kivy.metrics import dp
 import random
 import time
+from itertools import islice
 
 from audio_handling import get_song_data
 
@@ -25,6 +26,7 @@ class MainWidget(RelativeLayout):
     BTN_TRANSPARENCY = 0.25
     NUM_TILES = 30
     SPEED = 0.005
+    PRESS_THRESHOLD = 0.05
     
     lines = []
     
@@ -60,6 +62,14 @@ class MainWidget(RelativeLayout):
     
     song_path = 'audio/field.wav'
     song = None
+    difficulty = "medium"
+    
+    score = {"miss": 0, "okay": 0, "good": 0, "great": 0, "perfect": 0}
+    
+    combo = 0
+    multiplier = 1
+    
+    stat_txt = StringProperty("COMBO: 0\nACCURACY: 100.0%\nPERFECT: 0")
     
     def __init__(self, **kwargs):
         super(MainWidget, self).__init__(**kwargs)
@@ -73,7 +83,7 @@ class MainWidget(RelativeLayout):
         self.keyboard.bind(on_key_down=self.on_keyboard_down)
         self.keyboard.bind(on_key_up=self.on_keyboard_up)
         
-        self.song_data = get_song_data(self.song_path)
+        self.song_data = get_song_data(self.song_path, self.difficulty)
         
         Clock.schedule_interval(self.update, 1/60)
         
@@ -95,6 +105,8 @@ class MainWidget(RelativeLayout):
         for button, key in self.keybinds.items():
             if keycode[1] == key:
                 self.button_pressed(button)
+                if key not in self.pressed_keys:
+                    self.tile_pressed(int(button[1]))
                 self.pressed_keys.add(key)
                 break
                 
@@ -113,7 +125,7 @@ class MainWidget(RelativeLayout):
                 self.b2color.rgba = (1, 0, 0, 1)
             case "b3":
                 self.b3color.rgba = (0, 0, 1, 1)
-            case "b4":  
+            case "b4":
                 self.b4color.rgba = (1, 1, 0, 1)
     
     def button_released(self, button):
@@ -127,6 +139,46 @@ class MainWidget(RelativeLayout):
             case "b4":
                 self.b4color.rgba = (1, 1, 0, self.BTN_TRANSPARENCY)
     
+    def tile_pressed(self, line):
+        line_x = 0
+        match line:
+            case 1:
+                line_x = self.get_line_x_by_index(-2)
+            case 2:
+                line_x = self.get_line_x_by_index(-1)
+            case 3:
+                line_x = self.get_line_x_by_index(0)
+            case 4:
+                line_x = self.get_line_x_by_index(1)
+        
+        for i, tile in enumerate(self.tile_coordinates):
+            btn_height = self.height * self.BTN_HEIGHT
+            thres_height = self.height * self.PRESS_THRESHOLD
+            diff_y = abs(tile[1] - self.button_coords[line - 1][0][1]) # y coordinate of tile subtracted from LH corner of button
+            
+            if diff_y > btn_height + thres_height:
+                continue
+            elif tile[0] == line_x:
+                # Add to current score based on accuracy of button press
+                if diff_y <= btn_height * 0.05:
+                    self.score["perfect"] += 1
+                    self.combo += 1
+                elif diff_y <= btn_height * 0.2:
+                    self.score["great"] += 1
+                    self.combo += 1
+                elif diff_y <= btn_height * 0.4:
+                    self.score["good"] += 1
+                    self.combo += 1
+                elif diff_y <= btn_height * 0.9:
+                    self.score["okay"] += 1
+                    self.combo += 1
+                else:
+                    self.score["miss"] += 1
+                    self.combo = 0
+                
+                del self.tile_coordinates[i]
+                break
+
     def init_tiles(self):
         for i in range(self.NUM_TILES):
             with self.canvas:
@@ -138,23 +190,41 @@ class MainWidget(RelativeLayout):
         l2 = self.get_line_x_by_index(-1)
         l3 = self.get_line_x_by_index(0)
         l4 = self.get_line_x_by_index(1)
+        pitchMax = max(self.song_data.values())
+        pitchMin = min(self.song_data.values())
+        times = list(self.song_data.keys())
+        
         
         top = self.height * 1.1
         # tile_height = self.height * self.BTN_HEIGHT
-        for i, btime in enumerate(self.song_data):
+        for i, (btime, pitch) in enumerate(self.song_data.items()):
             if (btime - 0.08) <= self.time_elapsed <= (btime + 0.08) and self.NUM_TILES > len(self.tile_coordinates):
                 rng = [1, 2, 3, 4]
                 rep = 1
                 if i < len(self.song_data) - 2:
-                    if abs(self.song_data[i + 1] - self.song_data[i]) <= 0.15 and abs(self.song_data[i + 2] - self.song_data[i + 1]) <= 0.15:
+                    if abs(times[i + 1] - times[i]) <= 0.15 and abs(times[i + 2] - times[i + 1]) <= 0.15:
                         rep += 2
-                    elif abs(self.song_data[i + 1] - self.song_data[i]) <= 0.15:
+                    elif abs(times[i + 1] - times[i]) <= 0.15:
                         rep += 1
-                for k in range(rep):
+                
+                ### NOTE: GET AVERAGE OF PITCH INSTEAD OF MIN AND MAX
+                if pitchMin <= pitch < int(pitchMax * 0.25):
+                    self.tile_coordinates.append((l1, top))
+                    rng.remove(1)
+                elif int(pitchMin * 0.25) <= pitch < int(pitchMax * 0.5):
+                    self.tile_coordinates.append((l2, top))
+                    rng.remove(2)
+                elif int(pitchMin * 0.5) <= pitch < int(pitchMin * 0.75):
+                    self.tile_coordinates.append((l3, top))
+                    rng.remove(3)
+                elif int(pitchMin * 0.75) <= pitch <= pitchMax:
+                    self.tile_coordinates.append((l4, top))    
+                    rng.remove(4)    
+                
+                print(f'beat time: {btime} actual time: {self.time_elapsed} pitch: {pitch} reps: {rep}')
+                
+                for k in range(rep - 1):
                     r = random.choice(rng)
-                    rng.remove(r)
-                    
-                    print(f'beat time: {btime} actual time: {self.time_elapsed} rep: {k+1}')
                     
                     match r:
                         case 1:
@@ -165,8 +235,11 @@ class MainWidget(RelativeLayout):
                             self.tile_coordinates.append((l3, top))
                         case 4:
                             self.tile_coordinates.append((l4, top))
+                    
+                    rng.remove(r)
+                    
                 for j in range(rep):
-                    del self.song_data[i + j]
+                    del self.song_data[next(islice(self.song_data, i + j, None))]
                 break
     
     def update_tiles(self):
@@ -174,6 +247,8 @@ class MainWidget(RelativeLayout):
             for i in range(len(self.tile_coordinates)-1, -1, -1):
                 if self.tile_coordinates[i][1] < self.height * self.BTN_HEIGHT * -1:
                     del self.tile_coordinates[i]
+                    self.score['miss'] += 1
+                    self.combo = 0
                     
         if len(self.tile_coordinates) > 0:
             l1 = self.get_line_x_by_index(-2)
@@ -205,13 +280,13 @@ class MainWidget(RelativeLayout):
                 
                 x = self.tile_coordinates[i][0]
                 if x == l1:
-                    self.tile_colors[i].rgba = (0, 1, 0, 1)
+                    self.tile_colors[i].rgba = (0, 0.9, 0, 1)
                 elif x == l2:
-                    self.tile_colors[i].rgba = (1, 0, 0, 1)
+                    self.tile_colors[i].rgba = (0.9, 0, 0, 1)
                 elif x == l3:
-                    self.tile_colors[i].rgba = (0, 0, 1, 1)
+                    self.tile_colors[i].rgba = (0, 0, 0.9, 1)
                 elif x == l4:
-                    self.tile_colors[i].rgba = (1, 1, 0, 1)
+                    self.tile_colors[i].rgba = (0.9, 0.9, 0, 1)
         
         
         
@@ -315,6 +390,12 @@ class MainWidget(RelativeLayout):
                     self.button4.points = points
             
             currIndex += 1
+    
+    def update_stat_txt(self):
+        total = sum(self.score.values())
+        weighted = self.score['perfect'] + self.score['great'] * 0.8 + self.score['good'] * 0.6 + self.score['okay'] * 0.4
+        accuracy = (weighted / total) * 100 if total > 0 else 100
+        self.stat_txt = f"COMBO: {self.combo}\nACCURACY: {'{:.1f}'.format(accuracy)}\nPERFECT: {self.score['perfect']}"
             
     def update_clock(self, dt):
         self.time_elapsed = time.time() - self.time_start
@@ -325,6 +406,7 @@ class MainWidget(RelativeLayout):
         self.update_lines()
         self.update_buttons()
         self.update_tiles()
+        self.update_stat_txt()
 
 class BeatTrackApp(App):
     pass
